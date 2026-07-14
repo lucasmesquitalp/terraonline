@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "663526851234",
+    "project_id": "terraonline",
+    "storage_bucket": "terraonline.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:663526851234:android:024801e26fb85b3ef20dfb",
+        "android_client_info": {
+          "package_name": "com.terrafracta.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBUdj7_2vvRJM5AQEsgf0N8fEcKLWI0uf4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
