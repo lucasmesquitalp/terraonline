@@ -94,6 +94,11 @@ class AuthService(
 
     suspend fun signInWithGoogleToken(idToken: String): User = withContext(Dispatchers.IO) {
         if (!isNetworkAvailable(context)) {
+            // Attempt to find a local user first if offline
+            val existing = getOfflineSession()
+            if (existing != null) {
+                return@withContext existing
+            }
             throw Exception("Erro: Sem conexão com a internet. Verifique sua rede e tente novamente.")
         }
 
@@ -110,37 +115,34 @@ class AuthService(
             val photoUrl = firebaseUser.photoUrl?.toString() ?: ""
             
             var role = "Jogador"
-            val firestore = getFirebaseFirestoreSafe() ?: throw Exception("Erro: Firebase não inicializado corretamente (Firestore indisponível).")
-            
-            val docRef = firestore.collection("users").document(uid)
-            try {
-                val document = Tasks.await(docRef.get())
-                if (document.exists()) {
-                    role = document.getString("role") ?: "Jogador"
-                    val updateData = mapOf("lastLogin" to System.currentTimeMillis())
-                    Tasks.await(docRef.update(updateData))
-                    Log.d("AuthService", "Firestore: Existing Google user lastLogin updated.")
-                } else {
-                    val userData = mapOf(
-                        "uid" to uid,
-                        "displayName" to displayName,
-                        "email" to email,
-                        "photoURL" to photoUrl,
-                        "role" to role,
-                        "createdAt" to System.currentTimeMillis(),
-                        "lastLogin" to System.currentTimeMillis()
-                    )
-                    Tasks.await(docRef.set(userData))
-                    Log.d("AuthService", "Firestore: New Google user document created.")
+            val firestore = getFirebaseFirestoreSafe()
+            if (firestore != null) {
+                val docRef = firestore.collection("users").document(uid)
+                try {
+                    val document = Tasks.await(docRef.get())
+                    if (document.exists()) {
+                        role = document.getString("role") ?: "Jogador"
+                        val updateData = mapOf("lastLogin" to System.currentTimeMillis())
+                        Tasks.await(docRef.update(updateData))
+                        Log.d("AuthService", "Firestore: Existing Google user lastLogin updated.")
+                    } else {
+                        val userData = mapOf(
+                            "uid" to uid,
+                            "displayName" to displayName,
+                            "email" to email,
+                            "photoURL" to photoUrl,
+                            "role" to role,
+                            "createdAt" to System.currentTimeMillis(),
+                            "lastLogin" to System.currentTimeMillis()
+                        )
+                        Tasks.await(docRef.set(userData))
+                        Log.d("AuthService", "Firestore: New Google user document created.")
+                    }
+                } catch (fe: Exception) {
+                    Log.e("AuthService", "Firestore optional sync failed: ${fe.message}. Proceeding offline.", fe)
                 }
-            } catch (fe: Exception) {
-                Log.e("AuthService", "Firestore operation failed: ${fe.message}", fe)
-                val feMsg = fe.message ?: ""
-                if (feMsg.contains("PERMISSION_DENIED", ignoreCase = true) || feMsg.contains("permission-denied", ignoreCase = true) || feMsg.contains("permissão", ignoreCase = true)) {
-                    throw Exception("Erro: Firestore sem permissão (permissão negada para o usuário).")
-                } else {
-                    throw Exception("Erro no Firestore: ${fe.localizedMessage}")
-                }
+            } else {
+                Log.w("AuthService", "Firestore unavailable. User details will be saved locally only.")
             }
             
             val user = User(id = uid, email = email, displayName = displayName, role = role)
@@ -163,41 +165,44 @@ class AuthService(
     }
 
     suspend fun signInAnonymously(): User = withContext(Dispatchers.IO) {
-        if (!isNetworkAvailable(context)) {
-            throw Exception("Erro: Sem conexão com a internet. Verifique sua rede e tente novamente.")
+        val auth = getFirebaseAuthSafe()
+        if (!isNetworkAvailable(context) || auth == null) {
+            Log.w("AuthService", "Network or Firebase unavailable. Creating local offline guest session.")
+            val existing = getOfflineSession()
+            if (existing != null) {
+                return@withContext existing
+            } else {
+                val guestId = "offline_guest_" + java.util.UUID.randomUUID().toString().take(6)
+                val user = User(id = guestId, email = "", displayName = "Convidado Offline", role = "Convidado")
+                userDao.insertUser(user)
+                return@withContext user
+            }
         }
-
-        val auth = getFirebaseAuthSafe() ?: throw Exception("Erro: Firebase não inicializado corretamente.")
 
         try {
             val authResult = Tasks.await(auth.signInAnonymously())
-            val firebaseUser = authResult.user ?: throw Exception("Falha ao autenticar como convidado")
-            
+            val firebaseUser = authResult.user ?: throw Exception("Falha ao obter usuário anônimo")
             val uid = firebaseUser.uid
             val displayName = "Convidado"
             val role = "Convidado"
             
-            val firestore = getFirebaseFirestoreSafe() ?: throw Exception("Erro: Firebase não inicializado corretamente (Firestore indisponível).")
-            val docRef = firestore.collection("users").document(uid)
-            try {
-                val document = Tasks.await(docRef.get())
-                if (!document.exists()) {
-                    val userData = mapOf(
-                        "uid" to uid,
-                        "displayName" to displayName,
-                        "role" to role,
-                        "createdAt" to System.currentTimeMillis()
-                    )
-                    Tasks.await(docRef.set(userData))
-                    Log.d("AuthService", "Firestore: New guest user document created.")
-                }
-            } catch (fe: Exception) {
-                Log.e("AuthService", "Firestore operation failed for guest: ${fe.message}", fe)
-                val feMsg = fe.message ?: ""
-                if (feMsg.contains("PERMISSION_DENIED", ignoreCase = true) || feMsg.contains("permission-denied", ignoreCase = true) || feMsg.contains("permissão", ignoreCase = true)) {
-                    throw Exception("Erro: Firestore sem permissão (permissão negada para o usuário).")
-                } else {
-                    throw Exception("Erro no Firestore: ${fe.localizedMessage}")
+            val firestore = getFirebaseFirestoreSafe()
+            if (firestore != null) {
+                try {
+                    val docRef = firestore.collection("users").document(uid)
+                    val document = Tasks.await(docRef.get())
+                    if (!document.exists()) {
+                        val userData = mapOf(
+                            "uid" to uid,
+                            "displayName" to displayName,
+                            "role" to role,
+                            "createdAt" to System.currentTimeMillis()
+                        )
+                        Tasks.await(docRef.set(userData))
+                        Log.d("AuthService", "Firestore: New guest user document created.")
+                    }
+                } catch (fe: Exception) {
+                    Log.e("AuthService", "Firestore guest sync failed: ${fe.message}. Proceeding offline.", fe)
                 }
             }
             
@@ -205,15 +210,15 @@ class AuthService(
             userDao.insertUser(user)
             user
         } catch (e: Exception) {
-            Log.e("AuthService", "Anonymous Firebase Login failed: ${e.message}", e)
-            val msg = e.message ?: ""
-            if (msg.startsWith("Erro:")) {
-                throw e
-            }
-            if (msg.contains("network", ignoreCase = true) || msg.contains("UnknownHostException", ignoreCase = true)) {
-                throw Exception("Erro: Sem conexão com a internet. Verifique sua rede e tente novamente.")
+            Log.e("AuthService", "Anonymous Firebase Login failed, falling back to local guest: ${e.message}", e)
+            val existing = getOfflineSession()
+            if (existing != null) {
+                existing
             } else {
-                throw Exception("Erro ao entrar como convidado: ${e.localizedMessage ?: "Erro desconhecido"}")
+                val guestId = "offline_guest_" + java.util.UUID.randomUUID().toString().take(6)
+                val user = User(id = guestId, email = "", displayName = "Convidado Offline", role = "Convidado")
+                userDao.insertUser(user)
+                user
             }
         }
     }

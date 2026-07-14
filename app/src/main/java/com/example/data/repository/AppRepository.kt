@@ -213,24 +213,28 @@ class AppRepository(private val context: Context) {
         _syncStatusMessage.value = "Sincronizando..."
         withContext(Dispatchers.IO) {
             try {
-                // Try contacting real Firebase if integrated, otherwise just log and update local state
-                val firestore = FirebaseFirestore.getInstance()
-                val data = hashMapOf(
-                    "action" to action,
-                    "detail" to detail,
-                    "timestamp" to System.currentTimeMillis()
-                )
-                // Write to log collection, ignoring result (will fail silently or write to cache if offline)
-                firestore.collection("sync_logs")
-                    .add(data)
-                    .addOnSuccessListener {
-                        Log.d("FirestoreSync", "Successfully synced $action to firestore")
-                    }
-                    .addOnFailureListener {
-                        Log.d("FirestoreSync", "Firestore offline caching active for $action")
-                    }
+                if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
+                    Log.d("FirestoreSync", "Firebase not initialized. Action logged locally: $action ($detail)")
+                } else {
+                    // Try contacting real Firebase if integrated, otherwise just log and update local state
+                    val firestore = FirebaseFirestore.getInstance()
+                    val data = hashMapOf(
+                        "action" to action,
+                        "detail" to detail,
+                        "timestamp" to System.currentTimeMillis()
+                    )
+                    // Write to log collection, ignoring result (will fail silently or write to cache if offline)
+                    firestore.collection("sync_logs")
+                        .add(data)
+                        .addOnSuccessListener {
+                            Log.d("FirestoreSync", "Successfully synced $action to firestore")
+                        }
+                        .addOnFailureListener {
+                            Log.d("FirestoreSync", "Firestore offline caching active for $action")
+                        }
+                }
             } catch (e: Exception) {
-                // Firebase is not initialized (no google-services.json) or offline
+                // Firebase is not initialized or offline
                 Log.d("FirestoreSync", "Offline cache active. Action logged locally: $action ($detail)")
             }
         }
